@@ -13,7 +13,8 @@ EVAL_GAMES = 10000
 LEARNING_RATE = 1e-4
 HOLD_LR_MULTIPLIER = 3.0  # Hold head learns 3x faster
 CATEGORY_LR_MULTIPLIER = 1.0  # Category head learns at base rate
-BATCH_SIZE = 128
+BATCH_SIZE = 128  # Only used in old train method
+MINIBATCH_SIZE = 2048  # For flattened training - much larger for GPU efficiency
 K_EPOCHS = 2
 GAMMA = 0.99
 GAE_LAMBDA = 0.95  # GAE lambda for advantage estimation
@@ -88,8 +89,8 @@ def train_ppo_agent(num_episodes=NUM_EPISODES, num_parallel_games=NUM_PARALLEL_G
         total_rewards = rewards_tensor.sum(dim=0).mean().item()
         episode_rewards.append(total_rewards)
         
-        # Train PPO agent
-        policy_loss, value_loss = ppo_player.train(trajectory)
+        # Train PPO agent using flattened method for efficiency
+        policy_loss, value_loss = ppo_player.train_flattened(trajectory)
         policy_losses.append(policy_loss)
         value_losses.append(value_loss)
         

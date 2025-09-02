@@ -10,7 +10,10 @@
       "Bash(pip install:*)",
       "Bash(python:*)",
       "Bash(timeout:*)",
-      "WebFetch(domain:spinningup.openai.com)"
+      "WebFetch(domain:spinningup.openai.com)",
+      "Bash(git commit:*)",
+      "Bash(git checkout:*)",
+      "Bash(git add:*)"
     ],
     "deny": [],
     "ask": []

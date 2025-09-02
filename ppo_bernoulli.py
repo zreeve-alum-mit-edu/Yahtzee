@@ -435,3 +435,181 @@ class PPOBernoulliPlayer:
         
         # Return losses from last mini-batch for logging
         return policy_loss.item(), value_loss.item()
+    
+    def train_flattened(self, trajectory):
+        """
+        Train PPO using flattened trajectory for maximum efficiency.
+        Processes all hold decisions together and all category decisions together.
+        
+        Args:
+            trajectory: Dictionary with 'states', 'actions', 'rewards' lists
+        """
+        # Update old policy BEFORE training (critical for PPO!)
+        self.old_policy_net.load_state_dict(self.policy_net.state_dict())
+        
+        states = trajectory['states']
+        actions = trajectory['actions'] 
+        rewards = trajectory['rewards']
+        
+        # Get dimensions
+        T = len(states)  # 18 timesteps
+        B = states[0].shape[0]  # e.g., 10000 games
+        steps_per_episode = 18
+        
+        # Stack for easier manipulation
+        S = torch.stack(states)  # (T, B, 39)
+        R = torch.stack(rewards).squeeze(-1)  # (T, B)
+        
+        # Compute values for all states efficiently
+        with torch.no_grad():
+            V = torch.stack([self.value_net(s).squeeze(-1) for s in states])  # (T, B)
+        
+        # Mark episode boundaries  
+        dones = [(i + 1) % steps_per_episode == 0 for i in range(T)]
+        
+        # Compute returns and advantages using GAE
+        returns = self.compute_returns(rewards, dones)  # (T, B)
+        advantages = self.compute_advantages(rewards, V, dones)  # (T, B)
+        
+        # Identify hold vs category timesteps
+        is_hold = torch.tensor([a[0] == 'hold' for a in actions], device=self.device)
+        is_cat = ~is_hold
+        
+        # Build flattened datasets for holds
+        hold_indices = is_hold.nonzero().squeeze(-1).tolist()
+        if hold_indices:
+            S_hold = torch.cat([states[i] for i in hold_indices], dim=0)  # (12*B, 39)
+            A_hold = torch.cat([actions[i][1] for i in hold_indices], dim=0)  # (12*B, 5)
+            R_hold = torch.cat([returns[i] for i in hold_indices], dim=0)  # (12*B,)
+            Adv_hold = torch.cat([advantages[i] for i in hold_indices], dim=0)  # (12*B,)
+            
+            # Normalize advantages per type
+            Adv_hold = (Adv_hold - Adv_hold.mean()) / (Adv_hold.std() + 1e-8)
+            
+            # Precompute old log probs for holds
+            with torch.no_grad():
+                old_logits_h = self.old_policy_net(S_hold, 'hold')
+                old_probs_h = torch.sigmoid(old_logits_h)
+                old_dist_h = Bernoulli(old_probs_h)
+                old_logp_h = old_dist_h.log_prob(A_hold).sum(dim=-1)
+        
+        # Build flattened datasets for categories
+        cat_indices = is_cat.nonzero().squeeze(-1).tolist()
+        if cat_indices:
+            S_cat = torch.cat([states[i] for i in cat_indices], dim=0)  # (6*B, 39)
+            A_cat = torch.cat([actions[i][1] for i in cat_indices], dim=0)  # (6*B, 1)
+            R_cat = torch.cat([returns[i] for i in cat_indices], dim=0)  # (6*B,)
+            Adv_cat = torch.cat([advantages[i] for i in cat_indices], dim=0)  # (6*B,)
+            
+            # Normalize advantages per type
+            Adv_cat = (Adv_cat - Adv_cat.mean()) / (Adv_cat.std() + 1e-8)
+            
+            # Precompute old log probs for categories
+            with torch.no_grad():
+                old_logits_c = self.old_policy_net(S_cat, 'category')
+                old_probs_c = F.softmax(old_logits_c, dim=-1)
+                old_dist_c = Categorical(old_probs_c)
+                old_logp_c = old_dist_c.log_prob(A_cat.squeeze(-1))
+        
+        # Large batch size for better GPU utilization
+        mb_size = min(2048, B * 6)  # At least full games worth of data
+        
+        # Track losses for logging
+        total_policy_loss = 0
+        total_value_loss = 0
+        num_updates = 0
+        
+        # PPO epochs
+        for _ in range(self.k_epochs):
+            
+            # Process hold decisions
+            if hold_indices:
+                Nh = S_hold.shape[0]
+                perm_h = torch.randperm(Nh, device=self.device)
+                
+                for i in range(0, Nh, mb_size):
+                    idx = perm_h[i:min(i + mb_size, Nh)]
+                    
+                    # Policy forward pass
+                    logits = self.policy_net(S_hold[idx], 'hold')
+                    probs = torch.sigmoid(logits)
+                    dist = Bernoulli(probs)
+                    logp = dist.log_prob(A_hold[idx]).sum(dim=-1)
+                    ent = dist.entropy().sum(dim=-1)
+                    
+                    # PPO loss
+                    ratio = torch.exp(logp - old_logp_h[idx])
+                    surr1 = ratio * Adv_hold[idx]
+                    surr2 = torch.clamp(ratio, 1 - self.eps_clip, 1 + self.eps_clip) * Adv_hold[idx]
+                    policy_loss = -(torch.min(surr1, surr2).mean() + self.entropy_coef * ent.mean())
+                    
+                    # Value loss
+                    vpred = self.value_net(S_hold[idx]).squeeze(-1)
+                    value_loss = F.mse_loss(vpred, R_hold[idx])
+                    
+                    # Combined loss and update
+                    total_loss = policy_loss + self.value_loss_coef * value_loss
+                    
+                    self.policy_optimizer.zero_grad()
+                    self.value_optimizer.zero_grad()
+                    total_loss.backward()
+                    
+                    if self.max_grad_norm is not None:
+                        torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), self.max_grad_norm)
+                        torch.nn.utils.clip_grad_norm_(self.value_net.parameters(), self.max_grad_norm)
+                    
+                    self.policy_optimizer.step()
+                    self.value_optimizer.step()
+                    
+                    total_policy_loss += policy_loss.item()
+                    total_value_loss += value_loss.item()
+                    num_updates += 1
+            
+            # Process category decisions
+            if cat_indices:
+                Nc = S_cat.shape[0]
+                perm_c = torch.randperm(Nc, device=self.device)
+                
+                for i in range(0, Nc, mb_size):
+                    idx = perm_c[i:min(i + mb_size, Nc)]
+                    
+                    # Policy forward pass
+                    logits = self.policy_net(S_cat[idx], 'category')
+                    probs = F.softmax(logits, dim=-1)
+                    dist = Categorical(probs)
+                    logp = dist.log_prob(A_cat[idx].squeeze(-1))
+                    ent = dist.entropy()
+                    
+                    # PPO loss
+                    ratio = torch.exp(logp - old_logp_c[idx])
+                    surr1 = ratio * Adv_cat[idx]
+                    surr2 = torch.clamp(ratio, 1 - self.eps_clip, 1 + self.eps_clip) * Adv_cat[idx]
+                    policy_loss = -(torch.min(surr1, surr2).mean() + self.entropy_coef * ent.mean())
+                    
+                    # Value loss
+                    vpred = self.value_net(S_cat[idx]).squeeze(-1)
+                    value_loss = F.mse_loss(vpred, R_cat[idx])
+                    
+                    # Combined loss and update
+                    total_loss = policy_loss + self.value_loss_coef * value_loss
+                    
+                    self.policy_optimizer.zero_grad()
+                    self.value_optimizer.zero_grad()
+                    total_loss.backward()
+                    
+                    if self.max_grad_norm is not None:
+                        torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), self.max_grad_norm)
+                        torch.nn.utils.clip_grad_norm_(self.value_net.parameters(), self.max_grad_norm)
+                    
+                    self.policy_optimizer.step()
+                    self.value_optimizer.step()
+                    
+                    total_policy_loss += policy_loss.item()
+                    total_value_loss += value_loss.item()
+                    num_updates += 1
+        
+        # Return average losses
+        avg_policy_loss = total_policy_loss / max(num_updates, 1)
+        avg_value_loss = total_value_loss / max(num_updates, 1)
+        
+        return avg_policy_loss, avg_value_loss
