@@ -13,7 +13,8 @@
       "WebFetch(domain:spinningup.openai.com)",
       "Bash(git commit:*)",
       "Bash(git checkout:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git merge:*)"
     ],
     "deny": [],
     "ask": []
