@@ -5,7 +5,7 @@ from random_player import RandomPlayer
 
 # ============ HYPERPARAMETERS ============
 # Training configuration
-NUM_EPISODES = 5000
+NUM_EPISODES = 10000
 NUM_PARALLEL_GAMES = 10000
 EVAL_GAMES = 10000
 
