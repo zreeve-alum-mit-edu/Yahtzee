@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m pytest tests/test_dice_rolling.py -v)",
+      "Bash(python3 -m pytest tests/test_dice_rolling.py -v)",
+      "Bash(python3 -m unittest:*)",
+      "Bash(pip3 install:*)",
+      "Bash(python3:*)",
+      "Bash(source:*)",
+      "Bash(pip install:*)",
+      "Bash(python:*)",
+      "Bash(timeout:*)",
+      "WebFetch(domain:spinningup.openai.com)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
