@@ -1,7 +1,7 @@
 import torch
 import time
 from game_runner import GameRunner
-from ppo_bernoulli import PPOBernoulliPlayer
+from ppo_hold import PPOHoldPlayer
 from yahtzee import Yahtzee
 from random_player import RandomPlayer
 
@@ -45,11 +45,11 @@ ACTIVATION = 'leaky_relu'  # 'relu', 'leaky_relu', 'tanh'
 
 
 def train_ppo_agent(num_episodes=NUM_EPISODES, num_parallel_games=NUM_PARALLEL_GAMES):
-    """Train a PPO agent to play Yahtzee."""
+    """Train a PPO agent with discrete hold actions to play Yahtzee."""
     
-    # Create PPO Bernoulli player with hyperparameters from constants
+    # Create PPO Hold player with hyperparameters from constants
     # Note: use_compile can be set to False if torch.compile causes issues
-    ppo_player = PPOBernoulliPlayer(
+    ppo_player = PPOHoldPlayer(
         lr=LEARNING_RATE,
         hold_lr_mult=HOLD_LR_MULTIPLIER,
         category_lr_mult=CATEGORY_LR_MULTIPLIER,
@@ -76,8 +76,9 @@ def train_ppo_agent(num_episodes=NUM_EPISODES, num_parallel_games=NUM_PARALLEL_G
     value_losses = []
     episode_times = []
     
-    print(f"Training PPO agent for {num_episodes} episodes...")
+    print(f"Training PPO Hold agent for {num_episodes} episodes...")
     print(f"Running {num_parallel_games} games in parallel")
+    print("Using 32 discrete hold actions (2^5 patterns)")
     print("=" * 50)
     
     for episode in range(num_episodes):
@@ -137,8 +138,8 @@ def train_ppo_agent(num_episodes=NUM_EPISODES, num_parallel_games=NUM_PARALLEL_G
         'policy_net': ppo_player.policy_net.state_dict(),
         'value_net': ppo_player.value_net.state_dict(),
         'episode_rewards': episode_rewards,
-    }, 'ppo_yahtzee_model.pth')
-    print("Model saved to ppo_yahtzee_model.pth")
+    }, 'ppo_hold_yahtzee_model.pth')
+    print("Model saved to ppo_hold_yahtzee_model.pth")
     
     return ppo_player, episode_rewards, policy_losses, value_losses
 
@@ -249,7 +250,7 @@ def evaluate_agent(ppo_player, num_games=100):
 def compare_with_random(ppo_player, num_games=100):
     """Compare PPO agent with random player."""
     
-    print(f"\nComparing PPO vs Random on {num_games} games...")
+    print(f"\nComparing PPO Hold vs Random on {num_games} games...")
     
     # Set to evaluation mode for PPO player
     ppo_player.training = False
@@ -270,7 +271,7 @@ def compare_with_random(ppo_player, num_games=100):
     random_penalties = runner_random.game.penalties.sum().item() / num_games
     
     print("\nResults:")
-    print(f"PPO Agent:")
+    print(f"PPO Hold Agent:")
     print(f"  Mean Reward: {ppo_rewards.mean().item():.2f}")
     print(f"  Avg Penalties: {ppo_penalties:.2f}")
     print(f"\nRandom Player:")
@@ -281,6 +282,11 @@ def compare_with_random(ppo_player, num_games=100):
 
 def plot_training_curves(episode_rewards, policy_losses, value_losses):
     """Plot training curves."""
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError:
+        print("Matplotlib not available. Skipping plot generation.")
+        return
     
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
     
@@ -306,14 +312,16 @@ def plot_training_curves(episode_rewards, policy_losses, value_losses):
     axes[2].grid(True)
     
     plt.tight_layout()
-    plt.savefig('training_curves.png')
-    print("\nTraining curves saved to training_curves.png")
+    plt.savefig('training_curves_hold.png')
+    print("\nTraining curves saved to training_curves_hold.png")
     plt.show()
 
 
 if __name__ == "__main__":
     # Print hyperparameters
     print("\n" + "="*50)
+    print("PPO HOLD AGENT TRAINING")
+    print("="*50)
     print("HYPERPARAMETERS:")
     print(f"  Episodes: {NUM_EPISODES}")
     print(f"  Parallel Games: {NUM_PARALLEL_GAMES}")
@@ -330,6 +338,7 @@ if __name__ == "__main__":
     print(f"  Hold LR Multiplier: {HOLD_LR_MULTIPLIER}x")
     print(f"  Category LR Multiplier: {CATEGORY_LR_MULTIPLIER}x")
     print(f"  State Dim: 82 (dice:30 + upper:42 + lower:7 + turn:3)")
+    print(f"  Hold Actions: 32 discrete patterns (2^5)")
     print("="*50 + "\n")
     
     # Train the agent
@@ -345,5 +354,4 @@ if __name__ == "__main__":
     compare_with_random(ppo_player, num_games=EVAL_GAMES)
     
     # Plot training curves
-    # Uncomment if matplotlib is available
-    # plot_training_curves(episode_rewards, policy_losses, value_losses)
+    plot_training_curves(episode_rewards, policy_losses, value_losses)
