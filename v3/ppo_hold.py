@@ -299,6 +299,7 @@ class PPOHoldPlayer:
     def decide_category(self, game):
         """
         Decide which category to score based on current game state.
+        Uses masking to ensure only available categories can be selected.
         
         Args:
             game: MultiYahtzee game instance
@@ -309,20 +310,30 @@ class PPOHoldPlayer:
         # Get state using Multi-Yahtzee's get_state method
         state = game.get_state()
         
+        # Get available categories mask
+        available_mask = game.get_available_categories()  # [num_games, Z*13]
+        
         # Get category probabilities
         with torch.no_grad():
             # Disable AMP for sampling to avoid float16 precision issues with Categorical
             with torch.amp.autocast('cuda', enabled=False):
                 logits = self.policy_net(state, 'category')
+                
+                # Apply mask to logits - set unavailable categories to -inf
+                masked_logits = logits.clone()
+                masked_logits[~available_mask] = float('-inf')
             
             if self.training:
                 # Sample from categorical distribution during training
-                probs = F.softmax(logits, dim=-1)
+                probs = F.softmax(masked_logits, dim=-1)
+                # Add small epsilon to avoid numerical issues
+                probs = probs + 1e-10
+                probs = probs / probs.sum(dim=-1, keepdim=True)
                 dist = Categorical(probs)
                 category = dist.sample()  # (batch,)
             else:
                 # Use greedy selection during evaluation
-                category = torch.argmax(logits, dim=-1)  # (batch,)
+                category = torch.argmax(masked_logits, dim=-1)  # (batch,)
         
         return category
     
@@ -382,6 +393,7 @@ class PPOHoldPlayer:
         states = trajectory['states']
         actions = trajectory['actions'] 
         rewards = trajectory['rewards']
+        available_masks = trajectory.get('available_masks', [])
         
         # Get dimensions
         T = len(states)  # Total timesteps (Z*13 rounds × 3 decisions)
@@ -445,19 +457,33 @@ class PPOHoldPlayer:
             R_cat = returns[is_cat].reshape(-1)  # (num_cats*B,)
             Adv_cat = advantages[is_cat].reshape(-1)  # (num_cats*B,)
             
-            # Extract category actions from actions list
-            cat_actions = [actions[i][1] for i in torch.where(is_cat)[0].tolist()]
+            # Extract category actions and masks from trajectory
+            cat_indices = torch.where(is_cat)[0].tolist()
+            cat_actions = [actions[i][1] for i in cat_indices]
             A_cat = torch.cat(cat_actions, dim=0) if cat_actions else torch.empty(0, device=self.device, dtype=torch.long)
             if A_cat.dim() > 1:
                 A_cat = A_cat.squeeze(-1)  # Ensure 1D
             
+            # Extract available masks for category decisions
+            cat_masks = [available_masks[i] for i in cat_indices if available_masks[i] is not None]
+            if cat_masks:
+                M_cat = torch.cat(cat_masks, dim=0)  # (num_cats*B, Z*13)
+            else:
+                # If no masks provided, assume all categories available (for backward compatibility)
+                M_cat = torch.ones(S_cat.shape[0], self.Z * 13, device=self.device, dtype=torch.bool)
+            
             # Normalize advantages per type
             Adv_cat = (Adv_cat - Adv_cat.mean()) / (Adv_cat.std() + 1e-8)
             
-            # Precompute old log probs for categories
+            # Precompute old log probs for categories with masking
             with torch.no_grad():
                 old_logits_c = self.old_policy_net(S_cat, 'category')
-                old_probs_c = F.softmax(old_logits_c, dim=-1)
+                # Apply mask to old logits too
+                old_masked_logits = old_logits_c.clone()
+                old_masked_logits[~M_cat] = float('-inf')
+                old_probs_c = F.softmax(old_masked_logits, dim=-1)
+                old_probs_c = old_probs_c + 1e-10
+                old_probs_c = old_probs_c / old_probs_c.sum(dim=-1, keepdim=True)
                 old_dist_c = Categorical(old_probs_c)
                 old_logp_c = old_dist_c.log_prob(A_cat)
         
@@ -548,9 +574,18 @@ class PPOHoldPlayer:
                     
                     # Use AMP autocast for forward pass
                     with torch.amp.autocast('cuda', enabled=self.use_amp):
-                        # Policy forward pass
+                        # Policy forward pass with masking
                         logits = self.policy_net(S_cat[idx], 'category')
-                        probs = F.softmax(logits, dim=-1)
+                        
+                        # Apply mask to logits
+                        masked_logits = logits.clone()
+                        masked_logits[~M_cat[idx]] = float('-inf')
+                        
+                        probs = F.softmax(masked_logits, dim=-1)
+                        # Add epsilon to avoid numerical issues
+                        probs = probs + 1e-10
+                        probs = probs / probs.sum(dim=-1, keepdim=True)
+                        
                         dist = Categorical(probs)
                         logp = dist.log_prob(A_cat[idx])
                         ent = dist.entropy()

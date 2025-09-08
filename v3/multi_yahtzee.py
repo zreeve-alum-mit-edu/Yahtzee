@@ -224,35 +224,23 @@ class MultiYahtzee:
         # Initialize rewards
         rewards = torch.zeros(self.num_games, device=self.device)
         
-        # Get available categories and check which selections are invalid
-        available = self.get_available_categories()  # [num_games, Z*13]
+        # With masking, invalid selections should not occur
+        # We'll keep a simple check for debugging but no penalty
         flat_indices = category_indices.view(-1)  # [num_games]
         
-        # Gather whether selected categories are available
-        batch_indices = torch.arange(self.num_games, device=self.device)
-        selected_available = available[batch_indices, flat_indices]  # [num_games]
-        penalty_mask = ~selected_available.bool()  # [num_games]
+        # Optional: Debug check (can be removed in production)
+        # Uncomment to check for invalid selections during debugging
+        # available = self.get_available_categories()  # [num_games, Z*13]
+        # batch_indices = torch.arange(self.num_games, device=self.device)
+        # selected_available = available[batch_indices, flat_indices]  # [num_games]
+        # if not selected_available.all():
+        #     # This should not happen with masking
+        #     invalid_count = (~selected_available).sum().item()
+        #     print(f"WARNING: {invalid_count} invalid category selections detected despite masking!")
+        #     self.penalties += invalid_count
         
-        # Initialize final category indices (may be changed for penalized games)
-        final_indices = flat_indices.clone()  # [num_games]
-        
-        # Handle penalties and reassign categories
-        if penalty_mask.any():
-            # Apply penalty of -50 to games with invalid selections
-            rewards[penalty_mask] = -50.0
-            self.penalties[penalty_mask] += 1
-            
-            # For penalized games, randomly select from available categories
-            penalized_available = available[penalty_mask]  # [num_penalized, Z*13]
-            
-            # Add small epsilon to prevent zero probabilities
-            probs = penalized_available.float() + 1e-10  # [num_penalized, Z*13]
-            
-            # Sample new categories using multinomial
-            new_cats = torch.multinomial(probs, 1).squeeze(1)  # [num_penalized]
-            
-            # Update final indices for penalized games
-            final_indices[penalty_mask] = new_cats
+        # Use the selected indices directly
+        final_indices = flat_indices
         
         # Calculate bonus before scoring
         bonus_before = self.calculate_upper_bonus()  # [num_games, Z]

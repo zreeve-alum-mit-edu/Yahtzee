@@ -19,6 +19,7 @@ class GameRunner:
         self.states = []
         self.actions = []
         self.rewards = []
+        self.available_masks = []
     
     def create_game(self, num_games):
         """
@@ -32,6 +33,7 @@ class GameRunner:
         self.states = []
         self.actions = []
         self.rewards = []
+        self.available_masks = []
     
     def get_state(self):
         """
@@ -52,6 +54,7 @@ class GameRunner:
         self.states = []
         self.actions = []
         self.rewards = []
+        self.available_masks = []
         
         # Play 13 rounds per Z game = 13*Z total scoring decisions
         for round_num in range(13 * self.Z):
@@ -76,6 +79,8 @@ class GameRunner:
             self.actions.append(('hold', hold_mask))
             # No immediate reward for hold decisions
             self.rewards.append(torch.zeros(self.game.num_games, 1, device=self.device))
+            # No available mask for hold decisions
+            self.available_masks.append(None)
             
             # Second roll - roll unheld dice
             self.game.roll_dice(hold_mask)
@@ -91,6 +96,8 @@ class GameRunner:
             self.actions.append(('hold', hold_mask))
             # No immediate reward for hold decisions
             self.rewards.append(torch.zeros(self.game.num_games, 1, device=self.device))
+            # No available mask for hold decisions
+            self.available_masks.append(None)
             
             # Third roll - roll unheld dice
             self.game.roll_dice(hold_mask)
@@ -101,9 +108,13 @@ class GameRunner:
             
             # Scoring decision
             state = self.get_state()
+            # Get available categories mask for training
+            available_mask = self.game.get_available_categories()
             category = self.player.decide_category(self.game)
             self.states.append(state)
             self.actions.append(('category', category))
+            # Store available mask with category action for training
+            self.available_masks.append(available_mask)
             
             # Score the selected category and get reward
             reward = self.game.score_category(category)
@@ -118,9 +129,11 @@ class GameRunner:
                 - states: List of state tensors
                 - actions: List of (action_type, action_tensor) tuples
                 - rewards: List of reward tensors
+                - available_masks: List of available category masks (None for hold decisions)
         """
         return {
             'states': self.states,
             'actions': self.actions,
-            'rewards': self.rewards
+            'rewards': self.rewards,
+            'available_masks': self.available_masks
         }
