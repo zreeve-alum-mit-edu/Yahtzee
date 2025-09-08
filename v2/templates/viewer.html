@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Yahtzee PPO Hold Agent Viewer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            padding: 30px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+        
+        h1 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 30px;
+            font-size: 2.5em;
+        }
+        
+        .controls {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 30px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+        
+        button {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+        
+        button:hover:not(:disabled) {
+            background: #5a67d8;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+        
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .game-info {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin-bottom: 30px;
+            text-align: center;
+        }
+        
+        .info-card {
+            background: #f7fafc;
+            padding: 15px;
+            border-radius: 10px;
+            border: 2px solid #e2e8f0;
+        }
+        
+        .info-label {
+            font-size: 14px;
+            color: #718096;
+            margin-bottom: 5px;
+        }
+        
+        .info-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #2d3748;
+        }
+        
+        .dice-container {
+            background: #f7fafc;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 30px;
+        }
+        
+        .dice-row {
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            margin-bottom: 15px;
+        }
+        
+        .die {
+            width: 60px;
+            height: 60px;
+            background: white;
+            border: 3px solid #cbd5e0;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 32px;
+            font-weight: bold;
+            position: relative;
+            transition: all 0.3s ease;
+        }
+        
+        .die.held {
+            background: #fef2e8;
+            border-color: #f97316;
+        }
+        
+        .hold-indicator {
+            position: absolute;
+            bottom: -25px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        
+        .hold-indicator.hold {
+            color: #dc2626;
+        }
+        
+        .hold-indicator.roll {
+            color: #16a34a;
+        }
+        
+        .action-display {
+            background: #fef3c7;
+            border: 2px solid #fbbf24;
+            border-radius: 10px;
+            padding: 15px;
+            margin-bottom: 30px;
+            text-align: center;
+            font-size: 18px;
+            font-weight: 600;
+            color: #92400e;
+        }
+        
+        .scorecard {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        
+        .scorecard-section {
+            background: #f7fafc;
+            border-radius: 10px;
+            padding: 20px;
+        }
+        
+        .scorecard-title {
+            font-size: 20px;
+            font-weight: bold;
+            margin-bottom: 15px;
+            color: #4a5568;
+            text-align: center;
+        }
+        
+        .score-row {
+            display: grid;
+            grid-template-columns: 2fr 1fr 1fr;
+            padding: 8px;
+            border-bottom: 1px solid #e2e8f0;
+            align-items: center;
+        }
+        
+        .score-row:last-child {
+            border-bottom: none;
+        }
+        
+        .score-category {
+            font-weight: 500;
+            color: #4a5568;
+        }
+        
+        .score-value {
+            text-align: center;
+            font-weight: bold;
+            color: #2d3748;
+        }
+        
+        .score-available {
+            text-align: center;
+            color: #16a34a;
+            font-size: 20px;
+        }
+        
+        .score-bonus {
+            margin-top: 10px;
+            padding-top: 10px;
+            border-top: 2px solid #cbd5e0;
+            font-weight: bold;
+            color: #9333ea;
+        }
+        
+        .die-1 { color: #ef4444; }
+        .die-2 { color: #3b82f6; }
+        .die-3 { color: #10b981; }
+        .die-4 { color: #f97316; }
+        .die-5 { color: #8b5cf6; }
+        .die-6 { color: #ec4899; }
+        
+        @keyframes roll {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .rolling {
+            animation: roll 0.5s ease-in-out;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎲 Yahtzee PPO Hold Agent Viewer 🎲</h1>
+        
+        <div class="controls">
+            <button id="startBtn" onclick="startGame()">Start New Game</button>
+            <button id="stepBtn" onclick="nextStep()" disabled>Next Step</button>
+            <button id="autoPlayBtn" onclick="autoPlayRound()" disabled>Auto Play Round</button>
+        </div>
+        
+        <div class="game-info">
+            <div class="info-card">
+                <div class="info-label">Round</div>
+                <div class="info-value" id="roundInfo">-/13</div>
+            </div>
+            <div class="info-card">
+                <div class="info-label">Roll</div>
+                <div class="info-value" id="rollInfo">-/3</div>
+            </div>
+            <div class="info-card">
+                <div class="info-label">Total Score</div>
+                <div class="info-value" id="scoreInfo">0</div>
+            </div>
+        </div>
+        
+        <div class="dice-container">
+            <div class="dice-row" id="diceRow">
+                <div class="die" data-die="0">?</div>
+                <div class="die" data-die="1">?</div>
+                <div class="die" data-die="2">?</div>
+                <div class="die" data-die="3">?</div>
+                <div class="die" data-die="4">?</div>
+            </div>
+        </div>
+        
+        <div class="action-display" id="actionDisplay">
+            Click "Start New Game" to begin
+        </div>
+        
+        <div class="scorecard">
+            <div class="scorecard-section">
+                <div class="scorecard-title">Upper Section</div>
+                <div id="upperSection"></div>
+                <div class="score-bonus" id="upperBonus">Bonus (63+): -</div>
+            </div>
+            <div class="scorecard-section">
+                <div class="scorecard-title">Lower Section</div>
+                <div id="lowerSection"></div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        let gameState = null;
+        
+        async function startGame() {
+            const response = await fetch('/api/start_game', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'}
+            });
+            gameState = await response.json();
+            updateDisplay();
+            
+            document.getElementById('stepBtn').disabled = false;
+            document.getElementById('autoPlayBtn').disabled = false;
+        }
+        
+        async function nextStep() {
+            const response = await fetch('/api/next_step', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'}
+            });
+            gameState = await response.json();
+            updateDisplay();
+            
+            if (!gameState.game_started) {
+                document.getElementById('stepBtn').disabled = true;
+                document.getElementById('autoPlayBtn').disabled = true;
+            }
+        }
+        
+        async function autoPlayRound() {
+            document.getElementById('stepBtn').disabled = true;
+            document.getElementById('autoPlayBtn').disabled = true;
+            
+            const response = await fetch('/api/auto_play_round', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'}
+            });
+            const result = await response.json();
+            
+            // Animate through steps
+            for (let i = 0; i < result.steps.length; i++) {
+                gameState = result.steps[i];
+                updateDisplay();
+                await new Promise(resolve => setTimeout(resolve, 500));
+            }
+            
+            gameState = result.final_state;
+            updateDisplay();
+            
+            if (gameState.game_started) {
+                document.getElementById('stepBtn').disabled = false;
+                document.getElementById('autoPlayBtn').disabled = false;
+            }
+        }
+        
+        function updateDisplay() {
+            if (!gameState) return;
+            
+            // Update game info
+            document.getElementById('roundInfo').textContent = `${gameState.round}/13`;
+            document.getElementById('rollInfo').textContent = `${gameState.roll}/3`;
+            document.getElementById('scoreInfo').textContent = gameState.cumulative_score;
+            
+            // Update dice
+            const diceElements = document.querySelectorAll('.die');
+            gameState.dice_values.forEach((value, i) => {
+                diceElements[i].textContent = value;
+                diceElements[i].className = `die die-${value}`;
+                
+                // Add hold indicator
+                const existingIndicator = diceElements[i].querySelector('.hold-indicator');
+                if (existingIndicator) {
+                    existingIndicator.remove();
+                }
+                
+                if (gameState.hold_pattern && gameState.hold_pattern.length > 0) {
+                    const indicator = document.createElement('div');
+                    indicator.className = 'hold-indicator';
+                    if (gameState.hold_pattern[i]) {
+                        diceElements[i].classList.add('held');
+                        indicator.textContent = 'HOLD';
+                        indicator.classList.add('hold');
+                    } else {
+                        diceElements[i].classList.remove('held');
+                        indicator.textContent = 'ROLL';
+                        indicator.classList.add('roll');
+                    }
+                    diceElements[i].appendChild(indicator);
+                } else {
+                    diceElements[i].classList.remove('held');
+                }
+            });
+            
+            // Update action display
+            document.getElementById('actionDisplay').textContent = gameState.action_text;
+            
+            // Update scorecard
+            updateScorecard();
+        }
+        
+        function updateScorecard() {
+            if (!gameState) return;
+            
+            const upperSection = document.getElementById('upperSection');
+            const lowerSection = document.getElementById('lowerSection');
+            
+            upperSection.innerHTML = '';
+            lowerSection.innerHTML = '';
+            
+            // Upper section (0-5)
+            for (let i = 0; i < 6; i++) {
+                const row = document.createElement('div');
+                row.className = 'score-row';
+                row.innerHTML = `
+                    <div class="score-category">${gameState.category_names[i]}</div>
+                    <div class="score-value">${gameState.scores[i] !== undefined ? gameState.scores[i] : '-'}</div>
+                    <div class="score-available">${gameState.available.includes(i) ? '✓' : ''}</div>
+                `;
+                upperSection.appendChild(row);
+            }
+            
+            // Lower section (6-12)
+            for (let i = 6; i < 13; i++) {
+                const row = document.createElement('div');
+                row.className = 'score-row';
+                row.innerHTML = `
+                    <div class="score-category">${gameState.category_names[i]}</div>
+                    <div class="score-value">${gameState.scores[i] !== undefined ? gameState.scores[i] : '-'}</div>
+                    <div class="score-available">${gameState.available.includes(i) ? '✓' : ''}</div>
+                `;
+                lowerSection.appendChild(row);
+            }
+            
+            // Update bonus
+            document.getElementById('upperBonus').textContent = 
+                `Bonus (63+): ${gameState.upper_bonus > 0 ? gameState.upper_bonus : '-'}`;
+        }
+        
+        // Initialize scorecard on load
+        window.onload = function() {
+            gameState = {
+                category_names: ['Ones', 'Twos', 'Threes', 'Fours', 'Fives', 'Sixes',
+                                 '3-of-Kind', '4-of-Kind', 'Full House', 'Sm Straight', 
+                                 'Lg Straight', 'Yahtzee', 'Chance'],
+                scores: {},
+                available: [0,1,2,3,4,5,6,7,8,9,10,11,12],
+                upper_bonus: 0
+            };
+            updateScorecard();
+        };
+    </script>
+</body>
+</html>

@@ -15,7 +15,12 @@
       "Bash(git checkout:*)",
       "Bash(git add:*)",
       "Bash(git merge:*)",
-      "Bash(git mv:*)"
+      "Bash(git mv:*)",
+      "Bash(venv/bin/python:*)",
+      "Bash(git push:*)",
+      "Read(/mnt/c/Users/zreev/Downloads/**)",
+      "Bash(/mnt/c/GIT/Yahtzee/venv/bin/python:*)",
+      "Bash(grep:*)"
     ],
     "deny": [],
     "ask": []
