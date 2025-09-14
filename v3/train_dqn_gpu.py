@@ -16,7 +16,7 @@ DEFAULT_Z = 3  # Number of scorecards
 DEFAULT_EPISODES = 10000
 DEFAULT_PARALLEL_GAMES = 256
 DEFAULT_BATCH_SIZE = 256
-DEFAULT_UPDATES_PER_STEP = 4  # Gradient updates per episode
+DEFAULT_UPDATES_PER_STEP = 100  # Gradient updates per episode
 
 # Learning parameters
 DEFAULT_LR = 1e-4
@@ -32,7 +32,7 @@ DEFAULT_HIDDEN_DIM = 512
 DEFAULT_NUM_LAYERS = 4
 
 # DQN settings
-DEFAULT_TARGET_UPDATE_FREQ = 10  # Episodes between target network updates
+DEFAULT_TARGET_UPDATE_FREQ = 1  # Episodes between target network updates (1 = every episode)
 DEFAULT_BUFFER_SIZE = 100000
 DEFAULT_USE_DOUBLE_DQN = True
 DEFAULT_USE_HUBER_LOSS = True
