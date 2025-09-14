@@ -9,7 +9,7 @@ torch.set_float32_matmul_precision('high')
 
 # ============ HYPERPARAMETERS ============
 # Training configuration
-NUM_EPISODES = 20000
+NUM_EPISODES = 40000
 NUM_PARALLEL_GAMES = 2000
 EVAL_GAMES = 10000
 Z_GAMES = 3  # Number of simultaneous Yahtzee variants
@@ -20,23 +20,23 @@ USE_COMPILE = True  # torch.compile (set to False if causing issues)
 
 # PPO hyperparameters
 LEARNING_RATE = 1e-4
-HOLD_LR_MULTIPLIER = 3.0  # Hold head learns 3x faster
+HOLD_LR_MULTIPLIER = 1.0  # Hold head learns 3x faster
 CATEGORY_LR_MULTIPLIER = 1.0  # Category head learns at base rate
 BATCH_SIZE = 128  # Only used in old train method
 MINIBATCH_SIZE = 2048  # For flattened training - much larger for GPU efficiency
-K_EPOCHS = 2
+K_EPOCHS = 3
 # Gamma annealing parameters
 GAMMA_START = 0.98  # Starting gamma (discount factor)
 GAMMA_END = 1.0  # Final gamma
-GAMMA_ANNEAL_EPISODES = 3000  # Episodes to anneal gamma over
+GAMMA_ANNEAL_EPISODES = 10000  # Episodes to anneal gamma over
 # GAE Lambda annealing parameters
 GAE_LAMBDA_START = 0.95  # Starting GAE lambda
 GAE_LAMBDA_END = 1.0  # Final GAE lambda
-GAE_LAMBDA_ANNEAL_EPISODES = 3000  # Episodes to anneal GAE lambda over
+GAE_LAMBDA_ANNEAL_EPISODES = 10000  # Episodes to anneal GAE lambda over
 EPS_CLIP = 0.2  # PPO clipping parameter
 ENTROPY_COEF_START = 0.05  # Starting entropy coefficient
-ENTROPY_COEF_END = 0.0   # Final entropy coefficient (near zero)
-ENTROPY_ANNEAL_EPISODES = 5000  # Episodes to anneal entropy over
+ENTROPY_COEF_END = 0.00001   # Final entropy coefficient (near zero)
+ENTROPY_ANNEAL_EPISODES = 20000  # Episodes to anneal entropy over
 VALUE_LOSS_COEF = 0.5
 MAX_GRAD_NORM = 0.5
 
@@ -163,12 +163,17 @@ def train_ppo_agent(num_episodes=NUM_EPISODES, num_parallel_games=NUM_PARALLEL_G
     print("=" * 50)
     print("Training complete!")
     
-    # Save the trained model
+    # Save the trained model with architecture hyperparameters
     torch.save({
         'policy_net': ppo_player.policy_net.state_dict(),
         'value_net': ppo_player.value_net.state_dict(),
         'episode_rewards': episode_rewards,
         'Z': Z,
+        # Architecture hyperparameters for proper loading
+        'hidden_dim': HIDDEN_DIM,
+        'num_shared_layers': NUM_SHARED_LAYERS,
+        'num_branch_layers': NUM_BRANCH_LAYERS,
+        'activation': ACTIVATION,
     }, f'ppo_hold_multi_yahtzee_z{Z}_model.pth')
     print(f"Model saved to ppo_hold_multi_yahtzee_z{Z}_model.pth")
     

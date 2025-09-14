@@ -20,7 +20,8 @@
       "Bash(git push:*)",
       "Read(/mnt/c/Users/zreev/Downloads/**)",
       "Bash(/mnt/c/GIT/Yahtzee/venv/bin/python:*)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(venv/bin/pip install:*)"
     ],
     "deny": [],
     "ask": []

@@ -41,20 +41,27 @@ def load_model(Z):
         if not os.path.exists(model_path):
             return False
         
+    # Load checkpoint first to get architecture hyperparameters
+    checkpoint = torch.load(model_path, map_location='cpu', weights_only=True)
+    
+    # Get architecture hyperparameters from checkpoint (with defaults for older models)
+    hidden_dim = checkpoint.get('hidden_dim', 256)
+    num_shared_layers = checkpoint.get('num_shared_layers', 3)
+    num_branch_layers = checkpoint.get('num_branch_layers', 2)
+    activation = checkpoint.get('activation', 'leaky_relu')
+    
     # Create player with same architecture as training
     game_state['player'] = PPOHoldPlayer(
         Z=Z,
         lr=1e-4,
-        hidden_dim=128,
-        num_shared_layers=3,
-        num_branch_layers=2,
+        hidden_dim=hidden_dim,
+        num_shared_layers=num_shared_layers,
+        num_branch_layers=num_branch_layers,
+        activation=activation,
         use_compile=False,
         use_amp=False,
         device='cpu'
     )
-    
-    # Load weights
-    checkpoint = torch.load(model_path, map_location='cpu', weights_only=True)
     
     # Handle torch.compile state dict format (removes _orig_mod prefix)
     def fix_state_dict(state_dict):
@@ -269,6 +276,6 @@ if not model_loaded:
     print("WARNING: Could not load model file ppo_hold_multi_yahtzee_z3_model.pth")
 
 if __name__ == '__main__':
-    print("Starting Multi-Yahtzee web viewer at http://localhost:5000")
+    print("Starting Multi-Yahtzee web viewer at http://localhost:5678")
     print("Supports Z=1 to Z=5 scorecards")
-    app.run(debug=False, host='0.0.0.0', port=5000)
+    app.run(debug=False, host='0.0.0.0', port=5678)

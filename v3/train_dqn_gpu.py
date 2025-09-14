@@ -2,13 +2,14 @@ import torch
 import numpy as np
 from multi_yahtzee import MultiYahtzee
 from dqn_category_gpu import DQNCategoryPlayerGPU
+from precomputes import load_w_full_torch
 import time
 import argparse
 from collections import deque
 import matplotlib.pyplot as plt
 
 
-def play_vectorized_episodes(games, player, training=True):
+def play_vectorized_episodes(games, player, training=True, use_optimal_holds=False, W_full=None):
     """
     Play multiple parallel episodes of Multi-Yahtzee.
 
@@ -16,6 +17,8 @@ def play_vectorized_episodes(games, player, training=True):
         games: MultiYahtzee instance with multiple parallel games
         player: DQNCategoryPlayerGPU instance
         training: Whether to store transitions and update
+        use_optimal_holds: Whether to use optimal hold selection (for evaluation)
+        W_full: Preloaded transition tensor for optimal holds
 
     Returns:
         Total rewards for each game [num_games]
@@ -32,8 +35,13 @@ def play_vectorized_episodes(games, player, training=True):
             state = player.get_state(games)
 
             if roll < 2:  # Only hold for first 2 rolls
-                # Random hold decision
-                hold_mask = player.select_hold_action(state, games)
+                # Choose hold strategy based on training/evaluation
+                if use_optimal_holds and not training:
+                    # Use optimal holds during evaluation
+                    hold_mask = player.select_optimal_hold_action(state, games, W_full)
+                else:
+                    # Random hold decision during training
+                    hold_mask = player.select_hold_action(state, games)
                 games.roll_dice(hold_mask)
                 games.turn[:, :, roll] = 0
                 games.turn[:, :, roll + 1] = 1
@@ -91,16 +99,24 @@ def train(Z=3, num_episodes=10000, num_parallel_games=256, batch_size=256,
           epsilon_decay_steps=50000, target_update_freq=100, hidden_dim=512,
           num_layers=4, buffer_size=100000, device='cuda', save_freq=1000,
           eval_freq=100, eval_games=100, use_double_dqn=True, use_huber_loss=True,
-          use_fp16_buffer=True, updates_per_step=4):
+          use_fp16_buffer=True, updates_per_step=4, use_optimal_holds_eval=True):
     """
     Train DQN agent with GPU-optimized replay buffer.
 
     Args:
         Various training hyperparameters
+        use_optimal_holds_eval: Whether to use optimal holds during evaluation
     """
     # Initialize games and player
     train_games = MultiYahtzee(num_games=num_parallel_games, Z=Z, device=device)
     eval_games = MultiYahtzee(num_games=eval_games, Z=Z, device=device)
+
+    # Load transition tensor for optimal holds (if needed)
+    W_full = None
+    if use_optimal_holds_eval:
+        print("Loading transition tensor for optimal holds...")
+        W_full = load_w_full_torch(device=device)
+        print("✓ W_full loaded")
 
     player = DQNCategoryPlayerGPU(
         Z=Z,
@@ -140,6 +156,7 @@ def train(Z=3, num_episodes=10000, num_parallel_games=256, batch_size=256,
     print(f"Updates per step: {updates_per_step}")
     print(f"Hidden dim: {hidden_dim}, Layers: {num_layers}")
     print(f"Double DQN: {use_double_dqn}, Huber Loss: {use_huber_loss}")
+    print(f"Optimal holds in eval: {use_optimal_holds_eval}")
     print("-" * 50)
 
     start_time = time.time()
@@ -177,9 +194,15 @@ def train(Z=3, num_episodes=10000, num_parallel_games=256, batch_size=256,
             with torch.no_grad():
                 if device == 'cuda':
                     with torch.amp.autocast('cuda', enabled=True):
-                        eval_rewards_batch = play_vectorized_episodes(eval_games, player, training=False)
+                        eval_rewards_batch = play_vectorized_episodes(
+                            eval_games, player, training=False,
+                            use_optimal_holds=use_optimal_holds_eval, W_full=W_full
+                        )
                 else:
-                    eval_rewards_batch = play_vectorized_episodes(eval_games, player, training=False)
+                    eval_rewards_batch = play_vectorized_episodes(
+                        eval_games, player, training=False,
+                        use_optimal_holds=use_optimal_holds_eval, W_full=W_full
+                    )
                 eval_reward = eval_rewards_batch.mean().item()
                 eval_rewards.append(eval_reward)
 
@@ -321,6 +344,8 @@ def main():
                        help='Evaluation frequency (episodes)')
     parser.add_argument('--eval_games', type=int, default=100,
                        help='Number of evaluation games')
+    parser.add_argument('--use_optimal_holds_eval', action='store_true', default=True,
+                       help='Use optimal hold selection during evaluation')
 
     args = parser.parse_args()
 
@@ -352,7 +377,8 @@ def main():
         use_double_dqn=args.double_dqn,
         use_huber_loss=args.huber_loss,
         use_fp16_buffer=args.fp16_buffer,
-        updates_per_step=args.updates_per_step
+        updates_per_step=args.updates_per_step,
+        use_optimal_holds_eval=args.use_optimal_holds_eval
     )
 
 

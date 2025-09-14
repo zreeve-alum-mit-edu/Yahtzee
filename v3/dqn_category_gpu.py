@@ -4,6 +4,12 @@ import torch.nn.functional as F
 import torch.optim as optim
 import numpy as np
 from multi_yahtzee import MultiYahtzee
+from precomputes import (
+    load_w_full_torch,
+    dice_onehot_to_state_id_vectorized,
+    get_keep_masks_tensor,
+    create_all_sorted_dice_onehot
+)
 
 # Constants for dice holding patterns (32 possible combinations of 5 dice)
 DICE_HOLD_MASKS = torch.tensor([
@@ -408,3 +414,132 @@ class DQNCategoryPlayerGPU:
         self.epsilon = checkpoint.get('epsilon', 0.01)
         self.steps_done = checkpoint.get('steps_done', 0)
         self.episodes_done = checkpoint.get('episodes_done', 0)
+
+    def compute_V3_from_Q(self, games, W_full=None):
+        """
+        Compute V3 (value at S3) for all 252 dice states under current meta-state.
+
+        Args:
+            games: MultiYahtzee instance with current board state
+            W_full: Optional preloaded transition tensor (will load if None)
+
+        Returns:
+            V3_all: Tensor [B, 252] of values for each dice state per game
+        """
+        batch_size = games.num_games
+        device = self.device
+
+        # Create all 252 sorted dice states
+        all_dice_onehot = create_all_sorted_dice_onehot(device)  # [252, 5, 6]
+
+        # Prepare to compute states for all 252 dice patterns per game
+        # We'll expand and reshape to process all at once
+        V3_all = torch.zeros(batch_size, 252, device=device)
+
+        # Process each game's meta-state with all 252 dice patterns
+        for b in range(batch_size):
+            # Extract board features for game b
+            # Upper section for this game
+            upper_b = games.upper[b:b+1].expand(252, -1, -1, -1).reshape(252, -1)  # [252, Z*42]
+
+            # Lower section status for this game
+            lower_status_b = games.lower[b:b+1, :, :, 1].expand(252, -1, -1).reshape(252, -1)  # [252, Z*7]
+
+            # Turn indicator set to S3 (third roll)
+            turn_s3 = torch.zeros(252, 3, device=device)
+            turn_s3[:, 2] = 1  # Set to third roll
+
+            # Flatten all 252 dice states
+            dice_flat = all_dice_onehot.view(252, -1)  # [252, 30]
+
+            # Build 252 states for this game
+            states_b = torch.cat([dice_flat, upper_b, lower_status_b, turn_s3], dim=1)  # [252, state_dim]
+
+            # Get Q-values for all states
+            with torch.no_grad():
+                q_values = self.q_network(states_b)  # [252, num_categories]
+
+                # Get valid category mask for this game
+                # Extract masks for single game
+                upper_unscored_b = games.upper[b:b+1, :, :, 6] == 1  # [1, Z, 6]
+                lower_unscored_b = games.lower[b:b+1, :, :, 1] == 1  # [1, Z, 7]
+
+                # Combine for all Z scorecards
+                valid_categories = []
+                for z in range(self.Z):
+                    valid_z = torch.cat([upper_unscored_b[0, z], lower_unscored_b[0, z]], dim=0)
+                    valid_categories.append(valid_z)
+                valid_mask_b = torch.cat(valid_categories, dim=0)  # [Z*13]
+                valid_mask_b = valid_mask_b.unsqueeze(0).expand(252, -1)  # [252, Z*13]
+
+                # Mask invalid categories
+                q_values[~valid_mask_b] = float('-inf')
+
+                # Take max over valid categories to get V3
+                V3_all[b] = q_values.max(dim=1)[0]  # [252]
+
+        return V3_all
+
+    def select_optimal_hold_action(self, state, games, W_full=None):
+        """
+        Select optimal hold action using backward induction with Q-values.
+
+        Args:
+            state: Current state tensor [B, state_dim]
+            games: MultiYahtzee game instance
+            W_full: Optional preloaded transition tensor (will load if None)
+
+        Returns:
+            Hold mask tensor of shape [B, 5] (1=keep, 0=reroll)
+        """
+        batch_size = state.shape[0]
+        device = self.device
+
+        # Load W_full if not provided
+        if W_full is None:
+            W_full = load_w_full_torch(device=device)  # [252, 32, 252]
+
+        # Step 1: Compute V3 for all 252 dice states
+        V3_all = self.compute_V3_from_Q(games, W_full)  # [B, 252]
+
+        # Step 2: Backward induction V3 → V2 → V1
+        # S2 from S3: for each game b
+        q2_all = torch.einsum("hkp,bp->bhk", W_full, V3_all)  # [B, 252, 32]
+        V2_all, best_k_s2 = q2_all.max(dim=2)  # [B, 252], [B, 252]
+
+        # S1 from S2: for each game b
+        q1_all = torch.einsum("hkp,bp->bhk", W_full, V2_all)  # [B, 252, 32]
+        V1_all, best_k_s1 = q1_all.max(dim=2)  # [B, 252], [B, 252]
+
+        # Step 3: Get current dice state indices
+        current_dice = games.dice  # [B, 5, 6]
+        h0_all = dice_onehot_to_state_id_vectorized(current_dice)  # [B]
+
+        # Step 4: Get best hold mask for each game's current state
+        best_k = torch.gather(best_k_s1, 1, h0_all.unsqueeze(1)).squeeze(1)  # [B]
+
+        # Convert k indices to hold masks
+        keep_masks = get_keep_masks_tensor(device)  # [32, 5]
+        hold_masks = keep_masks[best_k]  # [B, 5]
+
+        return hold_masks
+
+
+def choose_best_S1_hold_from_Q(games, player, W_full=None, device="cuda"):
+    """
+    Standalone function to choose best S1 hold using Q-network values.
+
+    Args:
+        games: MultiYahtzee instance
+        player: DQNCategoryPlayerGPU instance
+        W_full: Optional preloaded transition tensor
+        device: Device to use
+
+    Returns:
+        Tensor [B, 5] of keep masks (1=keep, 0=reroll)
+    """
+    # Get current state
+    state = player.get_state(games)
+
+    # Use player's method to get optimal holds
+    return player.select_optimal_hold_action(state, games, W_full)
