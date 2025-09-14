@@ -30,8 +30,9 @@ def play_vectorized_episodes(games, player, training=True, use_optimal_holds=Fal
     total_rewards = torch.zeros(num_games, device=games.device)
 
     for round_num in range(games.total_rounds):
-        # Precompute cache for this round if using optimal holds
-        if use_optimal_holds and not training:
+        # Precompute cache for this round when using optimal holds
+        round_cache = None
+        if use_optimal_holds:
             # Compute all values once for this round
             round_cache = player.compute_round_cache(games, W_full)
 
@@ -40,12 +41,12 @@ def play_vectorized_episodes(games, player, training=True, use_optimal_holds=Fal
             state = player.get_state(games)
 
             if roll < 2:  # Only hold for first 2 rolls
-                # Choose hold strategy based on training/evaluation
-                if use_optimal_holds and not training:
+                # ALWAYS use optimal holds when available
+                if use_optimal_holds:
                     # Use cached optimal holds
                     hold_mask = player.get_cached_hold_action(games, roll + 1, round_cache)
                 else:
-                    # Random hold decision during training
+                    # Fallback to random holds only if optimal not enabled
                     hold_mask = player.select_hold_action(state, games)
                 games.roll_dice(hold_mask)
                 games.turn[:, :, roll] = 0
@@ -107,24 +108,24 @@ def train(Z=3, num_episodes=10000, num_parallel_games=256, batch_size=256,
           epsilon_decay_steps=50000, target_update_freq=100, hidden_dim=512,
           num_layers=4, buffer_size=100000, device='cuda', save_freq=1000,
           eval_freq=100, eval_games=100, use_double_dqn=True, use_huber_loss=True,
-          use_fp16_buffer=True, updates_per_step=4, use_optimal_holds_eval=True):
+          use_fp16_buffer=True, updates_per_step=4, use_optimal_holds=True):
     """
     Train DQN agent with GPU-optimized replay buffer.
 
     Args:
         Various training hyperparameters
-        use_optimal_holds_eval: Whether to use optimal holds during evaluation
+        use_optimal_holds: Whether to use optimal holds (default: True for both training and eval)
     """
     # Initialize games and player
     train_games = MultiYahtzee(num_games=num_parallel_games, Z=Z, device=device)
     eval_games = MultiYahtzee(num_games=eval_games, Z=Z, device=device)
 
-    # Load transition tensor for optimal holds (if needed)
+    # Load transition tensor for optimal holds
     W_full = None
-    if use_optimal_holds_eval:
+    if use_optimal_holds:
         print("Loading transition tensor for optimal holds...")
         W_full = load_w_full_torch(device=device)
-        print("✓ W_full loaded")
+        print("✓ W_full loaded for BOTH training and evaluation")
 
     player = DQNCategoryPlayerGPU(
         Z=Z,
@@ -164,19 +165,25 @@ def train(Z=3, num_episodes=10000, num_parallel_games=256, batch_size=256,
     print(f"Updates per step: {updates_per_step}")
     print(f"Hidden dim: {hidden_dim}, Layers: {num_layers}")
     print(f"Double DQN: {use_double_dqn}, Huber Loss: {use_huber_loss}")
-    print(f"Optimal holds in eval: {use_optimal_holds_eval}")
+    print(f"Optimal holds: {use_optimal_holds} (training AND evaluation)")
     print("-" * 50)
 
     start_time = time.time()
     total_games_played = 0
 
     for episode in range(num_episodes):
-        # Play parallel episodes
+        # Play parallel episodes WITH OPTIMAL HOLDS
         if device == 'cuda':
             with torch.amp.autocast('cuda', enabled=True):  # Use mixed precision for forward pass
-                episode_rewards_batch = play_vectorized_episodes(train_games, player, training=True)
+                episode_rewards_batch = play_vectorized_episodes(
+                    train_games, player, training=True,
+                    use_optimal_holds=use_optimal_holds, W_full=W_full
+                )
         else:
-            episode_rewards_batch = play_vectorized_episodes(train_games, player, training=True)
+            episode_rewards_batch = play_vectorized_episodes(
+                train_games, player, training=True,
+                use_optimal_holds=use_optimal_holds, W_full=W_full
+            )
 
         # Track metrics
         mean_reward = episode_rewards_batch.mean().item()
@@ -204,12 +211,12 @@ def train(Z=3, num_episodes=10000, num_parallel_games=256, batch_size=256,
                     with torch.amp.autocast('cuda', enabled=True):
                         eval_rewards_batch = play_vectorized_episodes(
                             eval_games, player, training=False,
-                            use_optimal_holds=use_optimal_holds_eval, W_full=W_full
+                            use_optimal_holds=use_optimal_holds, W_full=W_full
                         )
                 else:
                     eval_rewards_batch = play_vectorized_episodes(
                         eval_games, player, training=False,
-                        use_optimal_holds=use_optimal_holds_eval, W_full=W_full
+                        use_optimal_holds=use_optimal_holds, W_full=W_full
                     )
                 eval_reward = eval_rewards_batch.mean().item()
                 eval_rewards.append(eval_reward)
@@ -352,8 +359,8 @@ def main():
                        help='Evaluation frequency (episodes)')
     parser.add_argument('--eval_games', type=int, default=100,
                        help='Number of evaluation games')
-    parser.add_argument('--use_optimal_holds_eval', action='store_true', default=True,
-                       help='Use optimal hold selection during evaluation')
+    parser.add_argument('--use_optimal_holds', action='store_true', default=True,
+                       help='Use optimal hold selection (training AND evaluation)')
 
     args = parser.parse_args()
 
@@ -386,7 +393,7 @@ def main():
         use_huber_loss=args.huber_loss,
         use_fp16_buffer=args.fp16_buffer,
         updates_per_step=args.updates_per_step,
-        use_optimal_holds_eval=args.use_optimal_holds_eval
+        use_optimal_holds=args.use_optimal_holds
     )
 
 
