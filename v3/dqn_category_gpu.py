@@ -418,6 +418,7 @@ class DQNCategoryPlayerGPU:
     def compute_V3_from_Q(self, games, W_full=None):
         """
         Compute V3 (value at S3) for all 252 dice states under current meta-state.
+        Fully vectorized version - processes all games and dice states in one forward pass.
 
         Args:
             games: MultiYahtzee instance with current board state
@@ -429,54 +430,52 @@ class DQNCategoryPlayerGPU:
         batch_size = games.num_games
         device = self.device
 
-        # Create all 252 sorted dice states
+        # Create all 252 sorted dice states once
         all_dice_onehot = create_all_sorted_dice_onehot(device)  # [252, 5, 6]
+        dice_flat = all_dice_onehot.view(252, -1)  # [252, 30]
 
-        # Prepare to compute states for all 252 dice patterns per game
-        # We'll expand and reshape to process all at once
-        V3_all = torch.zeros(batch_size, 252, device=device)
+        # Repeat dice for all games: [B*252, 30]
+        dice_repeated = dice_flat.unsqueeze(0).expand(batch_size, -1, -1).reshape(-1, 30)
 
-        # Process each game's meta-state with all 252 dice patterns
-        for b in range(batch_size):
-            # Extract board features for game b
-            # Upper section for this game
-            upper_b = games.upper[b:b+1].expand(252, -1, -1, -1).reshape(252, -1)  # [252, Z*42]
+        # Expand board features for all 252 dice states per game
+        # Upper: [B, Z, 6, 7] -> [B, 1, Z*42] -> [B, 252, Z*42] -> [B*252, Z*42]
+        upper_flat = games.upper.view(batch_size, -1).unsqueeze(1).expand(-1, 252, -1).reshape(-1, self.Z * 42)
 
-            # Lower section status for this game
-            lower_status_b = games.lower[b:b+1, :, :, 1].expand(252, -1, -1).reshape(252, -1)  # [252, Z*7]
+        # Lower status: [B, Z, 7, 2] -> [B, Z*7] -> [B, 1, Z*7] -> [B, 252, Z*7] -> [B*252, Z*7]
+        lower_status = games.lower[:, :, :, 1].view(batch_size, -1).unsqueeze(1).expand(-1, 252, -1).reshape(-1, self.Z * 7)
 
-            # Turn indicator set to S3 (third roll)
-            turn_s3 = torch.zeros(252, 3, device=device)
-            turn_s3[:, 2] = 1  # Set to third roll
+        # Turn indicator for S3 (third roll): [B*252, 3]
+        turn_s3 = torch.zeros(batch_size * 252, 3, device=device)
+        turn_s3[:, 2] = 1  # Set all to third roll
 
-            # Flatten all 252 dice states
-            dice_flat = all_dice_onehot.view(252, -1)  # [252, 30]
+        # Concatenate all features into one big state tensor: [B*252, state_dim]
+        states_all = torch.cat([dice_repeated, upper_flat, lower_status, turn_s3], dim=1)
 
-            # Build 252 states for this game
-            states_b = torch.cat([dice_flat, upper_b, lower_status_b, turn_s3], dim=1)  # [252, state_dim]
+        # Single forward pass through Q-network
+        with torch.no_grad():
+            q_values_all = self.q_network(states_all)  # [B*252, Z*13]
 
-            # Get Q-values for all states
-            with torch.no_grad():
-                q_values = self.q_network(states_b)  # [252, num_categories]
+            # Build valid category mask for all games
+            # Upper unscored: [B, Z, 6] where last dim indicates if unscored
+            upper_unscored = games.upper[:, :, :, 6] == 1  # [B, Z, 6]
+            # Lower unscored: [B, Z, 7]
+            lower_unscored = games.lower[:, :, :, 1] == 1  # [B, Z, 7]
 
-                # Get valid category mask for this game
-                # Extract masks for single game
-                upper_unscored_b = games.upper[b:b+1, :, :, 6] == 1  # [1, Z, 6]
-                lower_unscored_b = games.lower[b:b+1, :, :, 1] == 1  # [1, Z, 7]
+            # Combine into full mask per game: [B, Z*13]
+            valid_masks = []
+            for z in range(self.Z):
+                valid_z = torch.cat([upper_unscored[:, z], lower_unscored[:, z]], dim=1)  # [B, 13]
+                valid_masks.append(valid_z)
+            valid_mask = torch.cat(valid_masks, dim=1)  # [B, Z*13]
 
-                # Combine for all Z scorecards
-                valid_categories = []
-                for z in range(self.Z):
-                    valid_z = torch.cat([upper_unscored_b[0, z], lower_unscored_b[0, z]], dim=0)
-                    valid_categories.append(valid_z)
-                valid_mask_b = torch.cat(valid_categories, dim=0)  # [Z*13]
-                valid_mask_b = valid_mask_b.unsqueeze(0).expand(252, -1)  # [252, Z*13]
+            # Repeat each game's mask 252 times: [B*252, Z*13]
+            valid_mask_expanded = valid_mask.repeat_interleave(252, dim=0)
 
-                # Mask invalid categories
-                q_values[~valid_mask_b] = float('-inf')
+            # Mask invalid categories with -inf
+            q_values_all[~valid_mask_expanded] = float('-inf')
 
-                # Take max over valid categories to get V3
-                V3_all[b] = q_values.max(dim=1)[0]  # [252]
+            # Take max over categories and reshape back to [B, 252]
+            V3_all = q_values_all.max(dim=1)[0].view(batch_size, 252)
 
         return V3_all
 
