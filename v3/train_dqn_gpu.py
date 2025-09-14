@@ -107,7 +107,7 @@ def train(Z=3, num_episodes=10000, num_parallel_games=256, batch_size=256,
           lr=1e-4, gamma=0.99, epsilon_start=1.0, epsilon_end=0.01,
           epsilon_decay_steps=50000, target_update_freq=100, hidden_dim=512,
           num_layers=4, buffer_size=100000, device='cuda', save_freq=1000,
-          eval_freq=100, eval_games=100, use_double_dqn=True, use_huber_loss=True,
+          eval_freq=10, eval_games=100, use_double_dqn=True, use_huber_loss=True,
           use_fp16_buffer=True, updates_per_step=4, use_optimal_holds=True):
     """
     Train DQN agent with GPU-optimized replay buffer.
@@ -151,8 +151,8 @@ def train(Z=3, num_episodes=10000, num_parallel_games=256, batch_size=256,
     losses = []
     epsilons = []
 
-    # Recent rewards for moving average
-    recent_rewards = deque(maxlen=100)
+    # Recent rewards for moving average (match eval_freq for smoother display)
+    recent_rewards = deque(maxlen=max(10, eval_freq))
 
     print(f"Starting GPU-optimized DQN training for Multi-Yahtzee with Z={Z}")
     print(f"Device: {device}")
@@ -355,7 +355,7 @@ def main():
                        help='Device (cuda or cpu)')
     parser.add_argument('--save_freq', type=int, default=1000,
                        help='Save frequency (episodes)')
-    parser.add_argument('--eval_freq', type=int, default=100,
+    parser.add_argument('--eval_freq', type=int, default=10,
                        help='Evaluation frequency (episodes)')
     parser.add_argument('--eval_games', type=int, default=100,
                        help='Number of evaluation games')
