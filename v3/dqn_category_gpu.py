@@ -159,7 +159,7 @@ class DQNCategoryPlayerGPU:
     """DQN agent with fully GPU-based replay buffer."""
 
     def __init__(self, Z=3, lr=1e-4, gamma=0.99, epsilon_start=1.0, epsilon_end=0.01,
-                 epsilon_decay_steps=10000, target_update_freq=100, batch_size=64,
+                 epsilon_decay_steps=10000, target_update_freq=10, batch_size=64,
                  hidden_dim=512, num_layers=4, activation='relu', buffer_size=100000,
                  use_double_dqn=True, use_huber_loss=True, use_fp16_buffer=True,
                  device='cuda'):
@@ -377,10 +377,8 @@ class DQNCategoryPlayerGPU:
         # Update epsilon (decay per step, not per episode)
         self.update_epsilon()
 
-        # Update target network
+        # Increment steps (for epsilon decay)
         self.steps_done += 1
-        if self.steps_done % self.target_update_freq == 0:
-            self.target_network.load_state_dict(self.q_network.state_dict())
 
         return loss.item()
 
@@ -392,6 +390,10 @@ class DQNCategoryPlayerGPU:
             self.epsilon = self.epsilon_start - (self.epsilon_start - self.epsilon_end) * decay_progress
         else:
             self.epsilon = self.epsilon_end
+
+    def update_target_network(self):
+        """Update target network with current Q-network weights."""
+        self.target_network.load_state_dict(self.q_network.state_dict())
 
     def save(self, filepath):
         """Save the model and training state."""

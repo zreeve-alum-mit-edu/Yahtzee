@@ -8,8 +8,50 @@ import argparse
 from collections import deque
 import matplotlib.pyplot as plt
 
+# ============= DEFAULT TRAINING PARAMETERS =============
+# Game settings
+DEFAULT_Z = 3  # Number of scorecards
 
-def play_vectorized_episodes(games, player, training=True, use_optimal_holds=False, W_full=None):
+# Training settings
+DEFAULT_EPISODES = 10000
+DEFAULT_PARALLEL_GAMES = 256
+DEFAULT_BATCH_SIZE = 256
+DEFAULT_UPDATES_PER_STEP = 4  # Gradient updates per episode
+
+# Learning parameters
+DEFAULT_LR = 1e-4
+DEFAULT_GAMMA = 0.99
+
+# Exploration
+DEFAULT_EPSILON_START = 1.0
+DEFAULT_EPSILON_END = 0.01
+DEFAULT_EPSILON_DECAY_STEPS = 50000
+
+# Network architecture
+DEFAULT_HIDDEN_DIM = 512
+DEFAULT_NUM_LAYERS = 4
+
+# DQN settings
+DEFAULT_TARGET_UPDATE_FREQ = 10  # Episodes between target network updates
+DEFAULT_BUFFER_SIZE = 100000
+DEFAULT_USE_DOUBLE_DQN = True
+DEFAULT_USE_HUBER_LOSS = True
+DEFAULT_USE_FP16_BUFFER = True
+
+# Training logistics
+DEFAULT_SAVE_FREQ = 1000  # Save checkpoint every N episodes
+DEFAULT_EVAL_FREQ = 10    # Evaluate and print progress every N episodes
+DEFAULT_EVAL_GAMES = 100  # Number of games for evaluation
+
+# Hold strategy
+DEFAULT_USE_OPTIMAL_HOLDS = True  # Use optimal holds for training AND evaluation
+
+# Device
+DEFAULT_DEVICE = 'cuda'
+# ======================================================
+
+
+def play_vectorized_episodes(games, player, training=True, use_optimal_holds=True, W_full=None):
     """
     Play multiple parallel episodes of Multi-Yahtzee.
 
@@ -103,12 +145,16 @@ def play_vectorized_episodes(games, player, training=True, use_optimal_holds=Fal
     return total_rewards
 
 
-def train(Z=3, num_episodes=10000, num_parallel_games=256, batch_size=256,
-          lr=1e-4, gamma=0.99, epsilon_start=1.0, epsilon_end=0.01,
-          epsilon_decay_steps=50000, target_update_freq=100, hidden_dim=512,
-          num_layers=4, buffer_size=100000, device='cuda', save_freq=1000,
-          eval_freq=10, eval_games=100, use_double_dqn=True, use_huber_loss=True,
-          use_fp16_buffer=True, updates_per_step=4, use_optimal_holds=True):
+def train(Z=DEFAULT_Z, num_episodes=DEFAULT_EPISODES, num_parallel_games=DEFAULT_PARALLEL_GAMES,
+          batch_size=DEFAULT_BATCH_SIZE, lr=DEFAULT_LR, gamma=DEFAULT_GAMMA,
+          epsilon_start=DEFAULT_EPSILON_START, epsilon_end=DEFAULT_EPSILON_END,
+          epsilon_decay_steps=DEFAULT_EPSILON_DECAY_STEPS, target_update_freq=DEFAULT_TARGET_UPDATE_FREQ,
+          hidden_dim=DEFAULT_HIDDEN_DIM, num_layers=DEFAULT_NUM_LAYERS,
+          buffer_size=DEFAULT_BUFFER_SIZE, device=DEFAULT_DEVICE, save_freq=DEFAULT_SAVE_FREQ,
+          eval_freq=DEFAULT_EVAL_FREQ, eval_games=DEFAULT_EVAL_GAMES,
+          use_double_dqn=DEFAULT_USE_DOUBLE_DQN, use_huber_loss=DEFAULT_USE_HUBER_LOSS,
+          use_fp16_buffer=DEFAULT_USE_FP16_BUFFER, updates_per_step=DEFAULT_UPDATES_PER_STEP,
+          use_optimal_holds=DEFAULT_USE_OPTIMAL_HOLDS):
     """
     Train DQN agent with GPU-optimized replay buffer.
 
@@ -203,6 +249,10 @@ def train(Z=3, num_episodes=10000, num_parallel_games=256, batch_size=256,
 
         # Increment episode counter
         player.episodes_done += 1
+
+        # Update target network based on episodes
+        if (episode + 1) % target_update_freq == 0:
+            player.update_target_network()
 
         # Evaluation
         if (episode + 1) % eval_freq == 0:
@@ -316,50 +366,50 @@ def main():
     parser = argparse.ArgumentParser(description='Train GPU-Optimized DQN for Multi-Yahtzee')
 
     # Game parameters
-    parser.add_argument('--Z', type=int, default=3, help='Number of scorecards')
+    parser.add_argument('--Z', type=int, default=DEFAULT_Z, help='Number of scorecards')
 
     # Training parameters
-    parser.add_argument('--episodes', type=int, default=10000, help='Number of episodes')
-    parser.add_argument('--num_parallel_games', type=int, default=256,
+    parser.add_argument('--episodes', type=int, default=DEFAULT_EPISODES, help='Number of episodes')
+    parser.add_argument('--num_parallel_games', type=int, default=DEFAULT_PARALLEL_GAMES,
                        help='Number of parallel games')
-    parser.add_argument('--batch_size', type=int, default=256, help='Batch size')
-    parser.add_argument('--lr', type=float, default=1e-4, help='Learning rate')
-    parser.add_argument('--gamma', type=float, default=0.99, help='Discount factor')
+    parser.add_argument('--batch_size', type=int, default=DEFAULT_BATCH_SIZE, help='Batch size')
+    parser.add_argument('--lr', type=float, default=DEFAULT_LR, help='Learning rate')
+    parser.add_argument('--gamma', type=float, default=DEFAULT_GAMMA, help='Discount factor')
 
     # Exploration parameters
-    parser.add_argument('--epsilon_start', type=float, default=1.0, help='Starting epsilon')
-    parser.add_argument('--epsilon_end', type=float, default=0.01, help='Ending epsilon')
-    parser.add_argument('--epsilon_decay_steps', type=int, default=50000,
+    parser.add_argument('--epsilon_start', type=float, default=DEFAULT_EPSILON_START, help='Starting epsilon')
+    parser.add_argument('--epsilon_end', type=float, default=DEFAULT_EPSILON_END, help='Ending epsilon')
+    parser.add_argument('--epsilon_decay_steps', type=int, default=DEFAULT_EPSILON_DECAY_STEPS,
                        help='Steps for epsilon decay')
 
     # Network parameters
-    parser.add_argument('--hidden_dim', type=int, default=512, help='Hidden dimension')
-    parser.add_argument('--num_layers', type=int, default=4, help='Number of layers')
+    parser.add_argument('--hidden_dim', type=int, default=DEFAULT_HIDDEN_DIM, help='Hidden dimension')
+    parser.add_argument('--num_layers', type=int, default=DEFAULT_NUM_LAYERS, help='Number of layers')
 
     # DQN parameters
-    parser.add_argument('--target_update_freq', type=int, default=100,
-                       help='Target network update frequency')
-    parser.add_argument('--buffer_size', type=int, default=100000,
+    parser.add_argument('--target_update_freq', type=int, default=DEFAULT_TARGET_UPDATE_FREQ,
+                       help='Target network update frequency (episodes)')
+    parser.add_argument('--buffer_size', type=int, default=DEFAULT_BUFFER_SIZE,
                        help='Replay buffer size')
-    parser.add_argument('--double_dqn', action='store_true', default=True,
+    parser.add_argument('--double_dqn', action='store_true', default=DEFAULT_USE_DOUBLE_DQN,
                        help='Use Double DQN')
-    parser.add_argument('--huber_loss', action='store_true', default=True,
+    parser.add_argument('--huber_loss', action='store_true', default=DEFAULT_USE_HUBER_LOSS,
                        help='Use Huber loss')
-    parser.add_argument('--fp16_buffer', action='store_true', default=True,
+    parser.add_argument('--fp16_buffer', action='store_true', default=DEFAULT_USE_FP16_BUFFER,
                        help='Use FP16 for buffer states')
-    parser.add_argument('--updates_per_step', type=int, default=4,
+    parser.add_argument('--updates_per_step', type=int, default=DEFAULT_UPDATES_PER_STEP,
                        help='Number of gradient updates per batch of games')
 
     # Other parameters
-    parser.add_argument('--device', type=str, default='cuda',
+    parser.add_argument('--device', type=str, default=DEFAULT_DEVICE,
                        help='Device (cuda or cpu)')
-    parser.add_argument('--save_freq', type=int, default=1000,
+    parser.add_argument('--save_freq', type=int, default=DEFAULT_SAVE_FREQ,
                        help='Save frequency (episodes)')
-    parser.add_argument('--eval_freq', type=int, default=10,
+    parser.add_argument('--eval_freq', type=int, default=DEFAULT_EVAL_FREQ,
                        help='Evaluation frequency (episodes)')
-    parser.add_argument('--eval_games', type=int, default=100,
+    parser.add_argument('--eval_games', type=int, default=DEFAULT_EVAL_GAMES,
                        help='Number of evaluation games')
-    parser.add_argument('--use_optimal_holds', action='store_true', default=True,
+    parser.add_argument('--use_optimal_holds', action='store_true', default=DEFAULT_USE_OPTIMAL_HOLDS,
                        help='Use optimal hold selection (training AND evaluation)')
 
     args = parser.parse_args()
