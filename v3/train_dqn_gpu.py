@@ -30,6 +30,11 @@ def play_vectorized_episodes(games, player, training=True, use_optimal_holds=Fal
     total_rewards = torch.zeros(num_games, device=games.device)
 
     for round_num in range(games.total_rounds):
+        # Precompute cache for this round if using optimal holds
+        if use_optimal_holds and not training:
+            # Compute all values once for this round
+            round_cache = player.compute_round_cache(games, W_full)
+
         # Roll phase (3 rolls with holds)
         for roll in range(3):
             state = player.get_state(games)
@@ -37,8 +42,8 @@ def play_vectorized_episodes(games, player, training=True, use_optimal_holds=Fal
             if roll < 2:  # Only hold for first 2 rolls
                 # Choose hold strategy based on training/evaluation
                 if use_optimal_holds and not training:
-                    # Use optimal holds during evaluation
-                    hold_mask = player.select_optimal_hold_action(state, games, W_full)
+                    # Use cached optimal holds
+                    hold_mask = player.get_cached_hold_action(games, roll + 1, round_cache)
                 else:
                     # Random hold decision during training
                     hold_mask = player.select_hold_action(state, games)
@@ -55,8 +60,11 @@ def play_vectorized_episodes(games, player, training=True, use_optimal_holds=Fal
         # Select category
         if training:
             actions = player.select_category_action(final_state, games)
+        elif use_optimal_holds:
+            # During evaluation with optimal holds, use cached best categories
+            actions = player.get_cached_category_action(games, round_cache)
         else:
-            # During evaluation, use greedy policy
+            # During evaluation without caching, use greedy policy
             actions = player.select_category_action(final_state, games, epsilon=0.0)
 
         # Execute category selection and get rewards

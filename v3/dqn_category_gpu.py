@@ -205,6 +205,9 @@ class DQNCategoryPlayerGPU:
         # Move hold masks to device
         self.dice_hold_masks = DICE_HOLD_MASKS.to(device)
 
+        # Cache for round computations (tuple of tensors, all on GPU)
+        self.round_cache = None
+
     def get_state(self, game):
         """Extract state representation from Multi-Yahtzee game."""
         batch_size = game.num_games
@@ -478,6 +481,156 @@ class DQNCategoryPlayerGPU:
             V3_all = q_values_all.max(dim=1)[0].view(batch_size, 252)
 
         return V3_all
+
+    def compute_round_cache(self, games, W_full=None):
+        """
+        Precompute and cache all values needed for a round.
+        This includes V3, V2, V1, best hold masks, and best categories.
+
+        Args:
+            games: MultiYahtzee instance with current board state
+            W_full: Preloaded transition tensor (will load if None)
+
+        Returns:
+            Dictionary with cached values for the round
+        """
+        device = self.device
+        batch_size = games.num_games
+
+        # Load W_full if not provided
+        if W_full is None:
+            W_full = load_w_full_torch(device=device)
+
+        # Step 1: Compute V3 and best categories for all 252 dice states
+        # Create all 252 sorted dice states once
+        all_dice_onehot = create_all_sorted_dice_onehot(device)  # [252, 5, 6]
+        dice_flat = all_dice_onehot.view(252, -1)  # [252, 30]
+
+        # Repeat dice for all games: [B*252, 30]
+        dice_repeated = dice_flat.unsqueeze(0).expand(batch_size, -1, -1).reshape(-1, 30)
+
+        # Expand board features for all 252 dice states per game
+        upper_flat = games.upper.view(batch_size, -1).unsqueeze(1).expand(-1, 252, -1).reshape(-1, self.Z * 42)
+        lower_status = games.lower[:, :, :, 1].view(batch_size, -1).unsqueeze(1).expand(-1, 252, -1).reshape(-1, self.Z * 7)
+
+        # Turn indicator for S3 (third roll)
+        turn_s3 = torch.zeros(batch_size * 252, 3, device=device)
+        turn_s3[:, 2] = 1
+
+        # Build state tensor: [B*252, state_dim]
+        states_all = torch.cat([dice_repeated, upper_flat, lower_status, turn_s3], dim=1)
+
+        # Single forward pass through Q-network
+        with torch.no_grad():
+            q_values_all = self.q_network(states_all)  # [B*252, Z*13]
+
+            # Build valid category mask for all games
+            upper_unscored = games.upper[:, :, :, 6] == 1  # [B, Z, 6]
+            lower_unscored = games.lower[:, :, :, 1] == 1  # [B, Z, 7]
+
+            # Combine into full mask per game: [B, Z*13]
+            valid_masks = []
+            for z in range(self.Z):
+                valid_z = torch.cat([upper_unscored[:, z], lower_unscored[:, z]], dim=1)
+                valid_masks.append(valid_z)
+            valid_mask = torch.cat(valid_masks, dim=1)  # [B, Z*13]
+
+            # Repeat each game's mask 252 times: [B*252, Z*13]
+            valid_mask_expanded = valid_mask.repeat_interleave(252, dim=0)
+
+            # Mask invalid categories with -inf
+            q_values_masked = q_values_all.clone()
+            q_values_masked[~valid_mask_expanded] = float('-inf')
+
+            # Get best categories and values for each dice state
+            V3_all, best_categories = q_values_masked.max(dim=1)  # [B*252], [B*252]
+            V3_all = V3_all.view(batch_size, 252)  # [B, 252]
+            best_categories = best_categories.view(batch_size, 252)  # [B, 252]
+
+        # Step 2: Backward induction V3 → V2 → V1
+        # S2 from S3
+        q2_all = torch.einsum("hkp,bp->bhk", W_full, V3_all)  # [B, 252, 32]
+        V2_all, best_k_s2 = q2_all.max(dim=2)  # [B, 252], [B, 252]
+
+        # S1 from S2
+        q1_all = torch.einsum("hkp,bp->bhk", W_full, V2_all)  # [B, 252, 32]
+        V1_all, best_k_s1 = q1_all.max(dim=2)  # [B, 252], [B, 252]
+
+        # Cache all computed values as a tuple (all tensors stay on GPU)
+        # Order: (V3_all, V2_all, V1_all, q2_all, q1_all, best_k_s2, best_k_s1, best_categories)
+        cache = (
+            V3_all,           # 0: [B, 252]
+            V2_all,           # 1: [B, 252]
+            V1_all,           # 2: [B, 252]
+            q2_all,           # 3: [B, 252, 32]
+            q1_all,           # 4: [B, 252, 32]
+            best_k_s2,        # 5: [B, 252]
+            best_k_s1,        # 6: [B, 252]
+            best_categories,  # 7: [B, 252]
+        )
+
+        # Store in instance cache
+        self.round_cache = cache
+        return cache
+
+    def get_cached_hold_action(self, games, roll_num, cache=None):
+        """
+        Get optimal hold action using cached values.
+
+        Args:
+            games: MultiYahtzee instance
+            roll_num: Which roll (1 or 2)
+            cache: Precomputed cache tuple (uses self.round_cache if None)
+
+        Returns:
+            Hold mask tensor of shape [B, 5]
+        """
+        if cache is None:
+            cache = self.round_cache
+
+        # Get current dice state indices
+        current_dice = games.dice  # [B, 5, 6]
+        h_current = dice_onehot_to_state_id_vectorized(current_dice)  # [B]
+
+        # Get best hold mask based on roll number
+        # Cache indices: 6=best_k_s1, 5=best_k_s2
+        if roll_num == 1:
+            # First roll: use S1 holds (index 6)
+            best_k = torch.gather(cache[6], 1, h_current.unsqueeze(1)).squeeze(1)  # [B]
+        elif roll_num == 2:
+            # Second roll: use S2 holds (index 5)
+            best_k = torch.gather(cache[5], 1, h_current.unsqueeze(1)).squeeze(1)  # [B]
+        else:
+            raise ValueError(f"Invalid roll_num: {roll_num}, must be 1 or 2")
+
+        # Convert k indices to hold masks
+        keep_masks = get_keep_masks_tensor(games.device)  # [32, 5]
+        hold_masks = keep_masks[best_k]  # [B, 5]
+
+        return hold_masks
+
+    def get_cached_category_action(self, games, cache=None):
+        """
+        Get optimal category action using cached values.
+
+        Args:
+            games: MultiYahtzee instance
+            cache: Precomputed cache tuple (uses self.round_cache if None)
+
+        Returns:
+            Category indices tensor of shape [B]
+        """
+        if cache is None:
+            cache = self.round_cache
+
+        # Get current dice state indices (after final roll)
+        current_dice = games.dice  # [B, 5, 6]
+        h_current = dice_onehot_to_state_id_vectorized(current_dice)  # [B]
+
+        # Get best category for current dice (index 7)
+        best_categories = torch.gather(cache[7], 1, h_current.unsqueeze(1)).squeeze(1)  # [B]
+
+        return best_categories
 
     def select_optimal_hold_action(self, state, games, W_full=None):
         """
